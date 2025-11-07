@@ -1,4 +1,4 @@
-# coco-pose-editor-vue2
+# MV decision
 
 ## Project setup
 ```
