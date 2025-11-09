@@ -2,16 +2,26 @@
   <div class="w-full h-full" style="padding:16px;">
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;">
       <strong>CocoPoseEditor (Vue 2)</strong>
+
+      <!-- 変形系 -->
       <button @click="onRotate(-15)">Rotate -15°</button>
       <button @click="onRotate(15)">Rotate +15°</button>
       <button @click="onScale(0.9)">Scale 90%</button>
       <button @click="onScale(1.1)">Scale 110%</button>
       <button @click="onMirror">Mirror LR</button>
+
       <label style="margin-left:8px;">
         <input type="checkbox" v-model="ikEnabled" />
         2-bone IK (wrists/ankles)
       </label>
+
       <button @click="onReset" style="margin-left:8px;">Reset</button>
+
+      <!-- ★ 追加: ポーズ保存 -->
+      <button @click="onSavePose" style="margin-left:8px;">
+        Save Pose (基準化)
+      </button>
+
       <button @click="onExport" style="margin-left:8px;">Export JSON</button>
 
       <label style="margin-left:8px;cursor:pointer;">
@@ -33,9 +43,17 @@
     </div>
 
     <p style="color:#555;margin-top:10px;">
-      使い方：青い点（関節）をドラッグで配置。手首/足首をドラッグすると、肘/膝が長さを保って追従（2-bone IK）。
-      Mirror/Rotate/Scale/Reset、背景画像、JSON入出力に対応。Import は
-      <code>{ image_path, meta, persons:[{ bbox, keypoints, keypoint_scores }] }</code> に準拠。
+      使い方：
+      <br>
+      1. 青い点（関節）をドラッグで配置してポーズを作る。
+      <br>
+      2. <b>Save Pose</b> を押すと、その時点のポーズが「基準ポーズ」としてグレーで固定される。
+         現在の編集用ポーズは初期姿勢にリセットされる。
+      <br>
+      3. 基準ポーズと現在ポーズの各エッジの差分が、赤い四角形として表示される。
+      <br>
+      4. Mirror/Rotate/Scale/Reset、背景画像、JSON入出力（Import形式:
+      <code>{ image_path, meta, persons:[{ bbox, keypoints, keypoint_scores }] }</code>）にも対応。
     </p>
   </div>
 </template>
@@ -48,7 +66,8 @@ export default {
     return {
       W, H,
       ctx: null,
-      points: initPose(W, H),        // [ [x,y], ... ] 17個
+      points: initPose(W, H),        // [ [x,y], ... ] 現在編集中のポーズ
+      savedPoints: null,             // ★ 保存された基準ポーズ [ [x,y], ... ] or null
       dragIdx: null,                 // いま掴んでいる点 index
       ikEnabled: true,
       bgImg: null,                   // HTMLImageElement
@@ -68,11 +87,16 @@ export default {
       deep: true,
       handler() { this.draw(); }
     },
-    bgImg() { this.draw(); }
+    bgImg() { this.draw(); },
+    // ★ 基準ポーズが変わったときも再描画
+    savedPoints: {
+      deep: true,
+      handler() { this.draw(); }
+    }
   },
   computed: {
     center() {
-      // 骨盤中心 (L_hip=11, R_hip=12)
+      // 骨盤中心 (L_hip=11, R_hip=12) - 現在ポーズに対するもの
       const L = this.points[11], R = this.points[12];
       return [(L[0] + R[0]) * 0.5, (L[1] + R[1]) * 0.5];
     }
@@ -86,24 +110,78 @@ export default {
       c.fillRect(0,0,W,H);
       if (this.bgImg) c.drawImage(this.bgImg, 0, 0, W, H);
 
-      // 骨
+      // ===== 1) 保存済みポーズ（基準）をグレーで描画 =====
+      if (this.savedPoints && this.savedPoints.length === this.points.length) {
+        c.lineWidth = 2;
+        c.strokeStyle = '#9ca3af'; // gray-400
+        EDGES.forEach(([a,b]) => {
+          const pa = this.savedPoints[a], pb = this.savedPoints[b];
+          if (!pa || !pb) return;
+          c.beginPath();
+          c.moveTo(pa[0], pa[1]);
+          c.lineTo(pb[0], pb[1]);
+          c.stroke();
+        });
+        this.savedPoints.forEach((p) => {
+          c.beginPath();
+          c.arc(p[0], p[1], 5, 0, Math.PI*2);
+          c.fillStyle = '#9ca3af';
+          c.fill();
+        });
+      }
+
+      // ===== 2) 現在のポーズ（編集用）を青／オレンジで描画 =====
       c.lineWidth = 3;
-      c.strokeStyle = '#1f2937';
+      c.strokeStyle = '#1f2937'; // almost-black
       EDGES.forEach(([a,b]) => {
         const pa = this.points[a], pb = this.points[b];
         if (!pa || !pb) return;
-        c.beginPath(); c.moveTo(pa[0], pa[1]); c.lineTo(pb[0], pb[1]); c.stroke();
+        c.beginPath();
+        c.moveTo(pa[0], pa[1]);
+        c.lineTo(pb[0], pb[1]);
+        c.stroke();
       });
 
-      // 点
       this.points.forEach((p,i) => {
-        c.beginPath(); c.arc(p[0], p[1], 7, 0, Math.PI*2);
-        c.fillStyle = (i === this.dragIdx) ? '#f59e0b' : '#2563eb';
+        c.beginPath();
+        c.arc(p[0], p[1], 7, 0, Math.PI*2);
+        c.fillStyle = (i === this.dragIdx) ? '#f59e0b' : '#2563eb'; // active:amber / normal:blue
         c.fill();
         c.font = '12px Menlo, ui-monospace';
         c.fillStyle = '#111827';
         c.fillText(`${i}:${KP_NAMES[i]}`, p[0] + 10, p[1] - 10);
       });
+
+      // ===== 3) 差分四角形（基準エッジ vs 現在エッジ）を赤で描画 =====
+      if (this.savedPoints && this.savedPoints.length === this.points.length) {
+        c.lineWidth = 2;
+        c.strokeStyle = 'rgba(239,68,68,0.9)'; // red-500
+        c.fillStyle   = 'rgba(239,68,68,0.18)';
+
+        EDGES.forEach(([a,b]) => {
+          const s1 = this.savedPoints[a];
+          const s2 = this.savedPoints[b];
+          const p1 = this.points[a];
+          const p2 = this.points[b];
+          if (!s1 || !s2 || !p1 || !p2) return;
+
+          // ほとんど動いていないエッジは省略（面積の閾値）
+          const area = Math.abs(
+            (s2[0]-s1[0]) * (p1[1]-s1[1]) - (s2[1]-s1[1]) * (p1[0]-s1[0])
+          );
+          if (area < 1e-1) return;
+
+          c.beginPath();
+          // 四角形: s1 -> p1 -> p2 -> s2 -> s1
+          c.moveTo(s1[0], s1[1]);
+          c.lineTo(p1[0], p1[1]);
+          c.lineTo(p2[0], p2[1]);
+          c.lineTo(s2[0], s2[1]);
+          c.closePath();
+          c.fill();
+          c.stroke();
+        });
+      }
     },
 
     // ========= マウス座標補正 & ヒットテスト =========
@@ -193,7 +271,19 @@ export default {
       this.transformAll(p => [ctr[0] + (p[0]-ctr[0])*sf, ctr[1] + (p[1]-ctr[1])*sf]);
       this.draw();
     },
-    onReset() { this.points = initPose(this.W, this.H); },
+    onReset() {
+      this.points = initPose(this.W, this.H);
+      this.dragIdx = null;
+    },
+
+    // ★ 新機能: 現在のポーズを「基準ポーズ」として保存
+    onSavePose() {
+      // 現在の points を deep copy して保存
+      this.savedPoints = this.points.map(p => [p[0], p[1]]);
+      // 編集用ポーズは初期姿勢に戻す
+      this.points = initPose(this.W, this.H);
+      this.dragIdx = null;
+    },
 
     // ========= I/O =========
     onExport() {
@@ -208,7 +298,7 @@ export default {
       URL.revokeObjectURL(url);
     },
 
-    // ★ ここを全面改修：指定の JSON 形式を読み込み、17点をキャンバスにフィット
+    // Import: 指定 JSON 形式から 17 点をキャンバスにフィット
     onImport(e) {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
@@ -216,11 +306,9 @@ export default {
       fr.onload = () => {
         try {
           const j = JSON.parse(String(fr.result));
-          // persons 配列チェック
           const persons = Array.isArray(j.persons) ? j.persons : [];
           if (!persons.length) throw new Error('persons array is empty');
 
-          // スコアで人物選択（平均 score 最大）
           const pickPerson = (arr) => {
             let best = null, bestScore = -Infinity;
             arr.forEach(p => {
@@ -234,21 +322,14 @@ export default {
 
           const person = pickPerson(persons);
           const rawKps = Array.isArray(person.keypoints) ? person.keypoints : [];
-
-          // 17個に正規化（足りなければ複製/0埋め、余れば先頭17）
           let pts = rawKps.map(v => [Number(v[0])||0, Number(v[1])||0]).slice(0,17);
           while (pts.length < 17) {
             pts.push(pts[pts.length-1] ? [...pts[pts.length-1]] : [0,0]);
           }
 
-          // キーポイントの外接矩形でキャンバスにフィット（マージン付き）
           const fitted = fitPointsToCanvas(pts, this.W, this.H, 40);
           this.points = fitted;
-
-          // 参考：image_path はローカルフルパスのため、そのままではブラウザで読めません。
-          // もし背景も合わせたい場合は、画像ファイルをこのアプリにアップロードしてから
-          // onBgUpload と同様に set する実装が必要です。
-
+          this.dragIdx = null;
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn('Invalid Import JSON:', err);
@@ -333,7 +414,6 @@ function fitPointsToCanvas(pts, W, H, margin=40) {
     }
   });
   if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
-    // 全部ゼロ・NaN 等のときは初期姿勢にフォールバック
     return initPose(W, H);
   }
   const bw = Math.max(1, maxX - minX);
@@ -345,7 +425,6 @@ function fitPointsToCanvas(pts, W, H, margin=40) {
   const cxData = (minX + maxX) / 2;
   const cyData = (minY + maxY) / 2;
 
-  // 中心合わせ + スケール
   return pts.map(([x,y]) => {
     const nx = (x - cxData) * s + cxCanvas;
     const ny = (y - cyData) * s + cyCanvas;
