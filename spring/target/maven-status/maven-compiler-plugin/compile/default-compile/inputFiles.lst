@@ -7,3 +7,8 @@
 /Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseQueryResponse.java
 /Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseSample.java
 /Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseSampleRepository.java
+/Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseSearchByFeatureRequest.java
+/Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseSearchByFeatureResponse.java
+/Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseSearchController.java
+/Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseSearchResultDto.java
+/Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseSearchService.java
