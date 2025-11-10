@@ -1,5 +1,3 @@
-// src/main/java/com/example/mvdecision/pose/PoseSample.java
-
 package com.example.mvdecision.pose;
 
 import jakarta.persistence.*;
@@ -12,50 +10,84 @@ public class PoseSample {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** アップロードした zip ファイル名（例: A.zip） */
+    // どの zip から来たか（例: A.zip / B.zip）
+    @Column(name = "dataset_name", length = 255)
     private String datasetName;
 
-    /** 画像ファイル名（例: A001.png） */
+    // 画像ファイル名（例: A001.png）
+    @Column(name = "image_file_name", length = 255)
     private String imageFileName;
 
-    /** 画像をサーバーに保存したパス（例: data/datasets/A.zip/A001.png） */
-    @Column(length = 1024)
+    // サーバー上のフルパス
+    @Column(name = "image_path", length = 1024)
     private String imagePath;
 
-    /** 元の JSON 全文 */
+    // 正規化済み keypoints の JSON ([[x,y], ...])
     @Lob
-    private String rawJson;
-
-    /** 正規化後の keypoints JSON */
-    @Lob
+    @Column(name = "normalized_keypoints_json", columnDefinition = "TEXT")
     private String normalizedKeypointsJson;
 
-    /** 類似度検索用の特徴ベクトル (JSON 文字列など) */
+    // ★ここが問題のカラム。TEXT にする
     @Lob
+    @Column(name = "feature_vector", columnDefinition = "TEXT")
     private String featureVector;
 
-    // --- getter / setter ----
+    // 元の JSON 丸ごと
+    @Lob
+    @Column(name = "raw_json", columnDefinition = "LONGTEXT")
+    private String rawJson;
 
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
+    // ====== getter / setter ======
 
-    public String getDatasetName() { return datasetName; }
-    public void setDatasetName(String datasetName) { this.datasetName = datasetName; }
+    public Long getId() {
+        return id;
+    }
 
-    public String getImageFileName() { return imageFileName; }
-    public void setImageFileName(String imageFileName) { this.imageFileName = imageFileName; }
+    public String getDatasetName() {
+        return datasetName;
+    }
 
-    public String getImagePath() { return imagePath; }
-    public void setImagePath(String imagePath) { this.imagePath = imagePath; }
+    public void setDatasetName(String datasetName) {
+        this.datasetName = datasetName;
+    }
 
-    public String getRawJson() { return rawJson; }
-    public void setRawJson(String rawJson) { this.rawJson = rawJson; }
+    public String getImageFileName() {
+        return imageFileName;
+    }
 
-    public String getNormalizedKeypointsJson() { return normalizedKeypointsJson; }
+    public void setImageFileName(String imageFileName) {
+        this.imageFileName = imageFileName;
+    }
+
+    public String getImagePath() {
+        return imagePath;
+    }
+
+    public void setImagePath(String imagePath) {
+        this.imagePath = imagePath;
+    }
+
+    public String getNormalizedKeypointsJson() {
+        return normalizedKeypointsJson;
+    }
+
     public void setNormalizedKeypointsJson(String normalizedKeypointsJson) {
         this.normalizedKeypointsJson = normalizedKeypointsJson;
     }
 
-    public String getFeatureVector() { return featureVector; }
-    public void setFeatureVector(String featureVector) { this.featureVector = featureVector; }
+    public String getFeatureVector() {
+        return featureVector;
+    }
+
+    public void setFeatureVector(String featureVector) {
+        this.featureVector = featureVector;
+    }
+
+    public String getRawJson() {
+        return rawJson;
+    }
+
+    public void setRawJson(String rawJson) {
+        this.rawJson = rawJson;
+    }
 }
