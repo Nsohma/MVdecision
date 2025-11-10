@@ -1,0 +1,22 @@
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/mvdecision?serverTimezone=Asia/Tokyo&characterEncoding=UTF-8
+    username: mvuser
+    password: mvpass
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update     # 開発中は update / create-drop など
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: true
+
+  servlet:
+    multipart:
+      max-file-size: 512MB
+      max-request-size: 512MB
+
+server:
+  port: 8081   # Vue dev(8080)と被らないように一応 8081 にしておく

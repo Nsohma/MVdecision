@@ -2,27 +2,22 @@
   <div class="w-full h-full" style="padding:16px;">
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;">
       <strong>CocoPoseEditor (Vue 2)</strong>
-
-      <!-- 変形系 -->
       <button @click="onRotate(-15)">Rotate -15°</button>
       <button @click="onRotate(15)">Rotate +15°</button>
       <button @click="onScale(0.9)">Scale 90%</button>
       <button @click="onScale(1.1)">Scale 110%</button>
       <button @click="onMirror">Mirror LR</button>
-
       <label style="margin-left:8px;">
         <input type="checkbox" v-model="ikEnabled" />
         2-bone IK (wrists/ankles)
       </label>
 
       <button @click="onReset" style="margin-left:8px;">Reset</button>
-
-      <!-- ★ ポーズ保存 -->
-      <button @click="onSavePose" style="margin-left:8px;">
-        Save Pose (基準化)
-      </button>
-
+      <button @click="onSavePose" style="margin-left:4px;">Save pose</button>
       <button @click="onExport" style="margin-left:8px;">Export JSON</button>
+
+      <!-- ★ ここが今回追加する検索ボタン -->
+      <button @click="onSearch" style="margin-left:8px;">Search Similar Cuts</button>
 
       <label style="margin-left:8px;cursor:pointer;">
         Import JSON
@@ -43,22 +38,9 @@
     </div>
 
     <p style="color:#555;margin-top:10px;">
-      使い方：
-      <br>
-      1. 青い点（関節）をドラッグで配置してポーズを作る。
-      <br>
-      2. <b>Save Pose</b> を押すと、その時点のポーズが「基準ポーズ」としてグレーで固定される。
-         編集用ポーズは初期姿勢にリセットされる。
-      <br>
-      3. 基準ポーズと現在ポーズの各エッジの差分が、赤い四角形として表示される。
-      <br>
-      4. Reset：
-         <ul>
-           <li>Save 後に動かしている途中なら → Save直後の状態に戻る</li>
-           <li>すでに初期位置のままなら → Save 前のポーズ編集に戻る</li>
-         </ul>
-      <br>
-      5. Mirror/Rotate/Scale/背景画像、JSON入出力にも対応。
+      使い方：青い点（関節）をドラッグで配置。グレーは保存済みのポーズ。
+      手首/足首をドラッグすると、肘/膝が長さを保って追従（2-bone IK）。
+      Mirror/Rotate/Scale/Reset、背景画像、JSON入出力、ポーズ保存、検索に対応。
     </p>
   </div>
 </template>
@@ -68,13 +50,12 @@ export default {
   name: 'CocoPoseEditor',
   data() {
     const W = 1200, H = 800;
-    const init = initPose(W, H);
     return {
       W, H,
       ctx: null,
-      points: init.map(p => [p[0], p[1]]),       // 現在編集中のポーズ
-      editOriginPoints: init.map(p => [p[0], p[1]]), // ★ この編集サイクルの基準ポーズ
-      savedPoints: null,                         // ★ Save Pose で固定した基準ポーズ（グレー表示用）
+      points: initPose(W, H),     // 現在編集中の17点
+      savedPoses: [],             // 過去に Save されたポーズ一覧（履歴）
+      currentVersion: -1,         // 今どのバージョンを見ているか（-1 は「未保存の最新」）
       dragIdx: null,
       ikEnabled: true,
       bgImg: null,
@@ -94,20 +75,16 @@ export default {
       deep: true,
       handler() { this.draw(); }
     },
-    bgImg() { this.draw(); },
-    savedPoints: {
-      deep: true,
-      handler() { this.draw(); }
-    }
+    bgImg() { this.draw(); }
   },
   computed: {
     center() {
-      // 骨盤中心 (L_hip=11, R_hip=12)
       const L = this.points[11], R = this.points[12];
       return [(L[0] + R[0]) * 0.5, (L[1] + R[1]) * 0.5];
     }
   },
   methods: {
+    // ===== 描画 =====
     draw() {
       if (!this.ctx) return;
       const c = this.ctx, { W, H } = this;
@@ -116,81 +93,46 @@ export default {
       c.fillRect(0,0,W,H);
       if (this.bgImg) c.drawImage(this.bgImg, 0, 0, W, H);
 
-      // ===== 1) 保存済みポーズ（基準）をグレーで描画 =====
-      if (this.savedPoints && this.savedPoints.length === this.points.length) {
+      // 保存済みポーズ（グレー）を描画
+      this.savedPoses.forEach(pose => {
+        const pts = pose.points;
+        // 骨
         c.lineWidth = 2;
-        c.strokeStyle = '#9ca3af'; // gray-400
+        c.strokeStyle = 'rgba(107,114,128,0.5)'; // gray-500, 半透明
         EDGES.forEach(([a,b]) => {
-          const pa = this.savedPoints[a], pb = this.savedPoints[b];
+          const pa = pts[a], pb = pts[b];
           if (!pa || !pb) return;
-          c.beginPath();
-          c.moveTo(pa[0], pa[1]);
-          c.lineTo(pb[0], pb[1]);
-          c.stroke();
+          c.beginPath(); c.moveTo(pa[0], pa[1]); c.lineTo(pb[0], pb[1]); c.stroke();
         });
-        this.savedPoints.forEach((p) => {
+        // 点
+        pts.forEach(p => {
           c.beginPath();
           c.arc(p[0], p[1], 5, 0, Math.PI*2);
-          c.fillStyle = '#9ca3af';
+          c.fillStyle = 'rgba(156,163,175,0.9)'; // gray-400
           c.fill();
         });
-      }
+      });
 
-      // ===== 2) 現在のポーズ（編集用）を青／オレンジで描画 =====
+      // 現在編集中のポーズ（青）
       c.lineWidth = 3;
       c.strokeStyle = '#1f2937';
       EDGES.forEach(([a,b]) => {
         const pa = this.points[a], pb = this.points[b];
         if (!pa || !pb) return;
-        c.beginPath();
-        c.moveTo(pa[0], pa[1]);
-        c.lineTo(pb[0], pb[1]);
-        c.stroke();
+        c.beginPath(); c.moveTo(pa[0], pa[1]); c.lineTo(pb[0], pb[1]); c.stroke();
       });
 
       this.points.forEach((p,i) => {
-        c.beginPath();
-        c.arc(p[0], p[1], 7, 0, Math.PI*2);
+        c.beginPath(); c.arc(p[0], p[1], 7, 0, Math.PI*2);
         c.fillStyle = (i === this.dragIdx) ? '#f59e0b' : '#2563eb';
         c.fill();
         c.font = '12px Menlo, ui-monospace';
         c.fillStyle = '#111827';
         c.fillText(`${i}:${KP_NAMES[i]}`, p[0] + 10, p[1] - 10);
       });
-
-      // ===== 3) 差分四角形（基準エッジ vs 現在エッジ）を赤で描画 =====
-      if (this.savedPoints && this.savedPoints.length === this.points.length) {
-        c.lineWidth = 2;
-        c.strokeStyle = 'rgba(239,68,68,0.9)';
-        c.fillStyle   = 'rgba(239,68,68,0.18)';
-
-        EDGES.forEach(([a,b]) => {
-          const s1 = this.savedPoints[a];
-          const s2 = this.savedPoints[b];
-          const p1 = this.points[a];
-          const p2 = this.points[b];
-          if (!s1 || !s2 || !p1 || !p2) return;
-
-          // ほとんど動いていないエッジは省略
-          const area = Math.abs(
-            (s2[0]-s1[0]) * (p1[1]-s1[1]) - (s2[1]-s1[1]) * (p1[0]-s1[0])
-          );
-          if (area < 1e-1) return;
-
-          c.beginPath();
-          // 四角形: s1 -> p1 -> p2 -> s2 -> s1
-          c.moveTo(s1[0], s1[1]);
-          c.lineTo(p1[0], p1[1]);
-          c.lineTo(p2[0], p2[1]);
-          c.lineTo(s2[0], s2[1]);
-          c.closePath();
-          c.fill();
-          c.stroke();
-        });
-      }
     },
 
-    // ========= マウス座標補正 & ヒットテスト =========
+    // ===== マウス操作 =====
     pick(x,y) {
       for (let i=this.points.length-1; i>=0; i--) {
         const p = this.points[i];
@@ -206,7 +148,6 @@ export default {
       const y = (e.clientY - rect.top)  * sy;
       return [x, y];
     },
-
     onMouseDown(e) {
       const [x, y] = this.toCanvasXY(e);
       this.dragIdx = this.pick(x,y);
@@ -252,7 +193,7 @@ export default {
       window.removeEventListener('mouseup', this.onMouseUp);
     },
 
-    // ========= 変形 =========
+    // ===== 変形 =====
     transformAll(fn) { this.points = this.points.map(fn); },
     onMirror() {
       const cx = this.center[0];
@@ -278,48 +219,58 @@ export default {
       this.draw();
     },
 
-    // ========= Reset の改良版 =========
+    // ===== Reset / Save pose バージョン管理 =====
     onReset() {
-      this.dragIdx = null;
-
-      if (this.savedPoints) {
-        // Save Pose 済み
-
-        if (!pointsAlmostEqual(this.points, this.editOriginPoints)) {
-          // まだ現在ポーズが「基準編集ポーズ」から動いている
-          // → その編集だけ取り消して、基準編集ポーズに戻す
-          this.points = this.editOriginPoints.map(p => [p[0], p[1]]);
-        } else {
-          // すでに基準編集ポーズと同じ（例: Save直後の初期位置のまま）
-          // → Save前のポーズ編集に戻す（グレーの savedPoints を編集対象に）
-          this.points = this.savedPoints.map(p => [p[0], p[1]]);
-          this.editOriginPoints = this.points.map(p => [p[0], p[1]]);
-          this.savedPoints = null; // グレーオーバーレイは消す
-        }
+      if (this.currentVersion === -1) {
+        // まだこのバージョンは Save されていないので、単に初期姿勢に戻す
+        this.points = initPose(this.W, this.H);
       } else {
-        // Save Pose していない通常ケース：完全初期化
-        const init = initPose(this.W, this.H);
-        this.points = init.map(p => [p[0], p[1]]);
-        this.editOriginPoints = this.points.map(p => [p[0], p[1]]);
+        // すでに保存済みのバージョンを見ている状態
+        // もし points が保存時から変更されていれば、その保存済みに戻す
+        const saved = this.savedPoses[this.currentVersion];
+        if (!saved) return;
+        this.points = saved.points.map(p => [p[0], p[1]]);
+        // その状態でさらに Reset を押された場合、
+        // 「ひとつ前のバージョン」に戻す挙動
+        this.currentVersion = Math.max(-1, this.currentVersion - 1);
+        if (this.currentVersion >= 0) {
+          const prev = this.savedPoses[this.currentVersion];
+          if (prev) {
+            this.points = prev.points.map(p => [p[0], p[1]]);
+          }
+        } else {
+          this.points = initPose(this.W, this.H);
+        }
       }
     },
 
-    // ★ Save Pose: 現在のポーズを基準として固定し、編集も同じ配置から開始
     onSavePose() {
-      // 1) 今の points を基準（グレー）として固定
-      const saved = this.points.map(p => [p[0], p[1]]);
-      this.savedPoints = saved;
-    
-      // 2) 編集用ポーズも「保存した点」と同じ配置で開始
-      this.points = saved.map(p => [p[0], p[1]]);
-    
-      // 3) この編集サイクルの基準（Resetで戻る位置）も同じに
-      this.editOriginPoints = this.points.map(p => [p[0], p[1]]);
-    
-      this.dragIdx = null;
+      const snapshot = this.points.map(p => [p[0], p[1]]);
+      this.savedPoses.push({ points: snapshot });
+      this.currentVersion = this.savedPoses.length - 1;
+      // Save したあと、現在の編集用ポーズを「保存済みと同じ初期状態」にする
+      this.points = snapshot.map(p => [p[0], p[1]]);
+      this.draw();
     },
 
-    // ========= I/O =========
+    // ===== 検索ボタン（今回追加）=====
+    onSearch() {
+      // 現在の17点を、そのまま or 正規化して親コンポーネントに投げる
+      // ここではキャンバス座標のまま送る。正規化はバックエンドでしてもOK。
+      const payload = {
+        keypoints: this.points.map((p, i) => ({
+          id: i,
+          name: KP_NAMES[i],
+          x: p[0],
+          y: p[1],
+        })),
+        width: this.W,
+        height: this.H,
+      };
+      this.$emit('search', payload);
+    },
+
+    // ===== I/O =====
     onExport() {
       const out = {
         keypoints: this.points.map((p,i) => ({ id:i, name:KP_NAMES[i], x:p[0], y:p[1], v:2 })),
@@ -331,7 +282,6 @@ export default {
       a.href = url; a.download = 'coco17_query.json'; a.click();
       URL.revokeObjectURL(url);
     },
-
     onImport(e) {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
@@ -341,7 +291,6 @@ export default {
           const j = JSON.parse(String(fr.result));
           const persons = Array.isArray(j.persons) ? j.persons : [];
           if (!persons.length) throw new Error('persons array is empty');
-
           const pickPerson = (arr) => {
             let best = null, bestScore = -Infinity;
             arr.forEach(p => {
@@ -352,27 +301,21 @@ export default {
             });
             return best || arr[0];
           };
-
           const person = pickPerson(persons);
           const rawKps = Array.isArray(person.keypoints) ? person.keypoints : [];
           let pts = rawKps.map(v => [Number(v[0])||0, Number(v[1])||0]).slice(0,17);
           while (pts.length < 17) {
             pts.push(pts[pts.length-1] ? [...pts[pts.length-1]] : [0,0]);
           }
-
           const fitted = fitPointsToCanvas(pts, this.W, this.H, 40);
           this.points = fitted;
-          this.editOriginPoints = this.points.map(p => [p[0], p[1]]);
-          this.dragIdx = null;
         } catch (err) {
-          // eslint-disable-next-line no-console
           console.warn('Invalid Import JSON:', err);
           alert('Import 失敗：JSON 形式を確認してください。');
         }
       };
       fr.readAsText(file);
     },
-
     onBgUpload(e) {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
@@ -384,7 +327,7 @@ export default {
   }
 };
 
-// ====== 定数 / ヘルパ ======
+// ===== 定数 / ヘルパ =====
 const KP_NAMES = [
   'nose', 'left_eye','right_eye', 'left_ear','right_ear',
   'left_shoulder','right_shoulder','left_elbow','right_elbow',
@@ -438,7 +381,7 @@ function solveTwoBone(root, joint, end, target){
   return { newJoint, newEnd };
 }
 
-// 2D 点群をキャンバスにフィット
+// 点群をキャンバスにフィット
 function fitPointsToCanvas(pts, W, H, margin=40) {
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
   pts.forEach(([x,y]) => {
@@ -464,17 +407,6 @@ function fitPointsToCanvas(pts, W, H, margin=40) {
     const ny = (y - cyData) * s + cyCanvas;
     return [nx, ny];
   });
-}
-
-// points 同士が「ほぼ同じか」を判定
-function pointsAlmostEqual(a, b, eps=1e-3) {
-  if (!a || !b || a.length !== b.length) return false;
-  for (let i=0; i<a.length; i++) {
-    const dx = a[i][0] - b[i][0];
-    const dy = a[i][1] - b[i][1];
-    if (dx*dx + dy*dy > eps*eps) return false;
-  }
-  return true;
 }
 </script>
 
