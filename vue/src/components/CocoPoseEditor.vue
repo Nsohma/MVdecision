@@ -16,7 +16,7 @@
       <button @click="onSavePose" style="margin-left:4px;">Save pose</button>
       <button @click="onExport" style="margin-left:8px;">Export JSON</button>
 
-      <!-- ★ ここが今回追加する検索ボタン -->
+      <!-- ★ バックエンドに投げて検索するボタン -->
       <button @click="onSearch" style="margin-left:8px;">Search Similar Cuts</button>
 
       <label style="margin-left:8px;cursor:pointer;">
@@ -42,10 +42,44 @@
       手首/足首をドラッグすると、肘/膝が長さを保って追従（2-bone IK）。
       Mirror/Rotate/Scale/Reset、背景画像、JSON入出力、ポーズ保存、検索に対応。
     </p>
+
+    <!-- ★ 検索結果の表示エリア -->
+    <div v-if="featurePreview" class="feature-preview">
+      <p><strong>Feature vector:</strong> {{ featurePreview.featureVector }}</p>
+    </div>
+
+    <div v-if="results.length" class="search-results">
+      <h3>検索結果（{{ results.length }}件）</h3>
+      <div class="grid">
+        <div v-for="r in results" :key="r.id" class="card">
+          <div class="thumb-wrap">
+            <img
+              :src="imageUrl(r)"
+              alt="pose result"
+              loading="lazy"
+              @error="onImgError"
+            />
+          </div>
+          <div class="meta">
+            <div class="title">{{ r.datasetName }} / {{ r.imageFileName }}</div>
+            <div class="distance">dist: {{ r.distance.toFixed(3) }}</div>
+            <!-- デバッグ用にパスを出したいときはコメントアウト解除
+            <div class="path">{{ r.imagePath }}</div>
+            -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-else-if="searchedOnce" class="search-empty">
+      <em>該当なし、または距離がしきい値を超えているため表示されていません。</em>
+    </div>
   </div>
 </template>
 
 <script>
+import axios from 'axios';
+
 export default {
   name: 'CocoPoseEditor',
   data() {
@@ -59,6 +93,11 @@ export default {
       dragIdx: null,
       ikEnabled: true,
       bgImg: null,
+
+      // ★ 検索関連
+      featurePreview: null,       // サーバから返ってきた featureVector
+      results: [],                // 類似検索の結果配列
+      searchedOnce: false,        // 一度でも検索を実行したかどうか
     };
   },
   mounted() {
@@ -222,16 +261,11 @@ export default {
     // ===== Reset / Save pose バージョン管理 =====
     onReset() {
       if (this.currentVersion === -1) {
-        // まだこのバージョンは Save されていないので、単に初期姿勢に戻す
         this.points = initPose(this.W, this.H);
       } else {
-        // すでに保存済みのバージョンを見ている状態
-        // もし points が保存時から変更されていれば、その保存済みに戻す
         const saved = this.savedPoses[this.currentVersion];
         if (!saved) return;
         this.points = saved.points.map(p => [p[0], p[1]]);
-        // その状態でさらに Reset を押された場合、
-        // 「ひとつ前のバージョン」に戻す挙動
         this.currentVersion = Math.max(-1, this.currentVersion - 1);
         if (this.currentVersion >= 0) {
           const prev = this.savedPoses[this.currentVersion];
@@ -248,26 +282,62 @@ export default {
       const snapshot = this.points.map(p => [p[0], p[1]]);
       this.savedPoses.push({ points: snapshot });
       this.currentVersion = this.savedPoses.length - 1;
-      // Save したあと、現在の編集用ポーズを「保存済みと同じ初期状態」にする
       this.points = snapshot.map(p => [p[0], p[1]]);
       this.draw();
     },
 
-    // ===== 検索ボタン（今回追加）=====
-    onSearch() {
-      // 現在の17点を、そのまま or 正規化して親コンポーネントに投げる
-      // ここではキャンバス座標のまま送る。正規化はバックエンドでしてもOK。
-      const payload = {
-        keypoints: this.points.map((p, i) => ({
-          id: i,
-          name: KP_NAMES[i],
-          x: p[0],
-          y: p[1],
-        })),
-        width: this.W,
-        height: this.H,
-      };
-      this.$emit('search', payload);
+    // ===== 類似検索（バックエンド呼び出し）=====
+    async onSearch() {
+      try {
+        // 1) 今のキャンバス上の17点を [ [x,y], ... ] に変換
+        const keypoints = this.points.map(p => [p[0], p[1]]);
+      
+        // 2) まず /api/query/pose/feature で featureVector を計算
+        const featureRes = await axios.post('/api/query/pose/feature', {
+          keypoints: keypoints,
+        });
+      
+        const featureVector = featureRes.data.featureVector;
+        // （必要なら正規化済みを可視化したいとき）
+        // const normalized = featureRes.data.normalizedKeypoints;
+      
+        // 3) 計算した featureVector を使って /api/query/pose/search で類似検索
+        const searchRes = await axios.post('/api/query/pose/search', {
+          featureVector: featureVector, // ★ここが重要
+          topK: 10,                     // 任意。省略時はサーバ側で 10 にしている
+        });
+      
+        // 期待レスポンス：
+        // { featureVector: "...", results: [{ id, datasetName, imageFileName, imagePath, distance }, ...] }
+        this.featurePreview = { featureVector: searchRes.data.featureVector };
+      
+        this.results = (searchRes.data.results || []).map(r => ({
+          id: r.id,
+          datasetName: r.datasetName,
+          imageFileName: r.imageFileName,
+          imagePath: r.imagePath,
+          distance: r.distance,
+        }));
+
+    this.searchedOnce = true;
+  } catch (err) {
+    console.error('Search failed:', err);
+    alert('検索に失敗しました。サーバのログを確認してください。');
+  }
+},
+
+
+    imageUrl(r) {
+      // ImageController の /api/images/{id} にあわせる
+      return `/api/images/${r.id}`;
+    },
+
+    onImgError(ev) {
+      ev.target.src =
+        'data:image/svg+xml;utf8,' +
+        encodeURIComponent(
+          `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="180"><rect width="100%" height="100%" fill="#eee"/><text x="50%" y="50%" text-anchor="middle" fill="#999" font-size="16">No Image</text></svg>`
+        );
     },
 
     // ===== I/O =====
@@ -420,4 +490,72 @@ button {
 }
 button:active { transform: scale(0.98); }
 canvas { display:block; width:100%; height:auto; }
+
+/* 検索結果のスタイル */
+.feature-preview {
+  margin-top: 16px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  border-radius: 6px;
+  font-family: Menlo, ui-monospace;
+  word-break: break-all;
+  font-size: 12px;
+}
+
+.search-results {
+  margin-top: 16px;
+}
+
+.search-results h3 {
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.thumb-wrap {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: #f3f4f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.thumb-wrap img {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+}
+
+.meta {
+  padding: 6px 8px 8px;
+}
+
+.meta .title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.meta .distance {
+  color: #6b7280;
+}
+
+.search-empty {
+  margin-top: 16px;
+  color: #6b7280;
+  font-size: 13px;
+}
 </style>

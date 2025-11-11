@@ -7,6 +7,7 @@ com/example/mvdecision/pose/PoseSample.class
 com/example/mvdecision/pose/PoseQueryController.class
 com/example/mvdecision/dataset/DatasetController.class
 com/example/mvdecision/pose/PoseQueryRequest.class
+com/example/mvdecision/image/ImageController.class
 com/example/mvdecision/pose/PoseSearchResultDto.class
 com/example/mvdecision/pose/PoseFeatureUtil.class
 com/example/mvdecision/MvdecisionApplication.class

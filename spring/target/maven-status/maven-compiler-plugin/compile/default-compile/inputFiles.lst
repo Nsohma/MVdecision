@@ -1,6 +1,7 @@
 /Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/MvdecisionApplication.java
 /Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/dataset/DatasetController.java
 /Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/dataset/DatasetImportService.java
+/Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/image/ImageController.java
 /Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseFeatureUtil.java
 /Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseQueryController.java
 /Users/niihosoushin/Desktop/MVdecision/spring/src/main/java/com/example/mvdecision/pose/PoseQueryRequest.java
