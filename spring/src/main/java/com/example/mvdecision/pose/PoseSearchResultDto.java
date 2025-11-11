@@ -7,6 +7,8 @@ public class PoseSearchResultDto {
     private String imageFileName;
     private String imagePath;
     private double distance;   // クエリとの類似度（距離）小さいほど似ている
+    private String sourceImagePath;
+    private String displayPath;
 
     public Long getId() {
         return id;
@@ -47,4 +49,22 @@ public class PoseSearchResultDto {
     public void setDistance(double distance) {
         this.distance = distance;
     }
+
+        // === 既存 getter/setter の下に追加 ===
+    public String getSourceImagePath() {
+        return sourceImagePath;
+    }
+
+    public void setSourceImagePath(String sourceImagePath) {
+        this.sourceImagePath = sourceImagePath;
+    }
+
+    public String getDisplayPath() {
+        return displayPath;
+    }
+
+    public void setDisplayPath(String displayPath) {
+        this.displayPath = displayPath;
+    }
+
 }

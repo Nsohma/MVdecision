@@ -60,7 +60,8 @@ public class PoseSearchService {
             dto.setImageFileName(sample.getImageFileName());
             dto.setImagePath(sample.getImagePath());
             dto.setDistance(dist);
-
+            dto.setSourceImagePath(sample.getSourceImagePath());
+            dto.setDisplayPath(buildDisplayPath(sample));
             scored.add(dto);
         }
 
@@ -108,4 +109,29 @@ public class PoseSearchService {
         }
         return Math.sqrt(sum);
     }
+
+
+    private String buildDisplayPath(PoseSample sample) {
+        String src = sample.getSourceImagePath();
+        if (src == null || src.isBlank()) {
+            // 何もなければ従来の表示にフォールバック
+            return sample.getDatasetName() + "/" + sample.getImageFileName();
+        }
+        // パス区切りを / にそろえる
+        String normalized = src.replace('\\', '/');
+        String[] parts = normalized.split("/");
+
+        // 末尾3要素を "C001/B/B005.png" の形で返す
+        if (parts.length >= 3) {
+            int n = parts.length;
+            String parts_n1 = parts[n-1].substring(0, parts[n-1].length()-4);
+            return parts[n-3] + "・"+ parts_n1;
+        } else if (parts.length == 2) {
+            return parts[0] + "/" + parts[1];
+        } else {
+            return normalized;
+        }
+    }
 }
+
+

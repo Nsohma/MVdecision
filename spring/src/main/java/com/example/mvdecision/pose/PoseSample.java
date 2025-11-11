@@ -22,6 +22,13 @@ public class PoseSample {
     @Column(name = "image_path", length = 1024)
     private String imagePath;
 
+    // ★ 追加: 元JSONに書かれていた image_path（元データの保存場所）
+    @Column(name = "source_image_path", length = 2048)
+    private String sourceImagePath;
+
+    @Column(name = "cut_code", length = 32)
+    private String cutCode; // 例: "C392"
+
     // 正規化済み keypoints の JSON ([[x,y], ...])
     @Lob
     @Column(name = "normalized_keypoints_json", columnDefinition = "TEXT")
@@ -90,4 +97,17 @@ public class PoseSample {
     public void setRawJson(String rawJson) {
         this.rawJson = rawJson;
     }
+
+    public String getSourceImagePath() {
+        return sourceImagePath;
+    }
+
+    public void setSourceImagePath(String sourceImagePath) {
+        this.sourceImagePath = sourceImagePath;
+    }
+
+
+    public String getCutCode() { return cutCode; }
+    public void setCutCode(String cutCode) { this.cutCode = cutCode; }
+
 }

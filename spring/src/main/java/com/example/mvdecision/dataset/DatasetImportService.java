@@ -8,16 +8,25 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-
+import org.springframework.util.StringUtils;
+import java.util.Map;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Objects;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 
 @Service
 public class DatasetImportService {
@@ -25,110 +34,136 @@ public class DatasetImportService {
     private final PoseSampleRepository poseSampleRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // data/datasets の下に zip ごとのディレクトリを作る
-    private final Path imageBaseDir = Paths.get("data", "datasets");
+    // ★ ここを String → Path にして、デフォルトの保存ルートを固定
+    //   これで常に data/datasets 配下に保存されます
+    private final Path datasetRoot = Paths.get("data", "datasets");
+
+    private static final Pattern CUT_CODE_PATTERN = Pattern.compile("C\\d{3,4}");
+
+    private String extractCutCodeFromSourcePath(String sourceImagePath) {
+        if (sourceImagePath == null) return null;
+        Matcher m = CUT_CODE_PATTERN.matcher(sourceImagePath);
+        return m.find() ? m.group() : null; // 例: "C392"
+    }
+
+    private String zipBaseName(String zipFileName) {
+        if (zipFileName == null) return "unknown";
+        int dot = zipFileName.lastIndexOf('.');
+        return (dot > 0) ? zipFileName.substring(0, dot) : zipFileName; // "B.zip" -> "B"
+    }
 
     @Autowired
     public DatasetImportService(PoseSampleRepository poseSampleRepository) throws IOException {
         this.poseSampleRepository = poseSampleRepository;
-        Files.createDirectories(imageBaseDir);
+        // ★ ここで data/datasets を必ず作っておく
+        Files.createDirectories(datasetRoot);
     }
 
     /**
      * フロントから受け取った zip をパースして DB に保存。
-     * 画像は data/datasets/{zip名}/ に保存し、そのパスを image_path に入れる。
+     * 画像は data/datasets/{cutCode}_{zipBase}/ に保存し、そのパスを image_path に入れる。
      */
     public void importZip(MultipartFile zipFile) throws IOException {
-        String datasetName = zipFile.getOriginalFilename(); // 例: B.zip
-        if (datasetName == null || datasetName.isBlank()) {
-            datasetName = "unknown";
-        }
-
-        // この zip 専用のディレクトリ: data/datasets/B.zip/
-        Path datasetDir = imageBaseDir.resolve(datasetName);
-        Files.createDirectories(datasetDir);
-
-        try (ZipInputStream zis = new ZipInputStream(zipFile.getInputStream())) {
-            ZipEntry entry;
-
-            while ((entry = zis.getNextEntry()) != null) {
-                if (entry.isDirectory()) {
-                    continue;
-                }
-
-                String entryName = entry.getName(); // 例: "B010.png" or "subdir/B010_keypoints.json"
+        String zipName = StringUtils.cleanPath(Objects.requireNonNull(zipFile.getOriginalFilename()));
+        String zipBase = zipBaseName(zipName);
+        if (zipBase == null || zipBase.isBlank()) zipBase = "unknown";
+    
+        // 1) アップロードを一時ファイルへ
+        Path tmp = Files.createTempFile("mvdecision-upload-", ".zip");
+        zipFile.transferTo(tmp.toFile());
+    
+        // 画像ファイル名 -> 最終保存先パス の対応を貯める
+        Map<String, Path> imageDestMap = new HashMap<>();
+    
+        try (ZipFile zf = new ZipFile(tmp.toFile())) {
+        
+            // ---------- パス1：JSON だけ読む ----------
+            Enumeration<? extends ZipEntry> entries1 = zf.entries();
+            while (entries1.hasMoreElements()) {
+                ZipEntry e = entries1.nextElement();
+                if (e.isDirectory()) continue;
+            
+                String entryName = e.getName();
                 String fileNameOnly = Paths.get(entryName).getFileName().toString();
-
-                // 1) 画像ファイルならディスクに保存して終わり
-                if (isImageFile(fileNameOnly)) {
-                    Path target = datasetDir.resolve(fileNameOnly);
-                    Files.createDirectories(target.getParent());
-                    byte[] bytes = zis.readAllBytes();
-                    Files.write(target, bytes,
-                            StandardOpenOption.CREATE,
-                            StandardOpenOption.TRUNCATE_EXISTING);
-                    System.out.println("Saved image: " + target.toAbsolutePath());
-                    continue;
-                }
-
-                // 2) JSON 以外は無視（__MACOSX, .DS_Store など）
-                if (!fileNameOnly.endsWith(".json")) {
-                    continue;
-                }
-
-                System.out.println("Parsing JSON entry: " + fileNameOnly);
-
-                try {
-                    String jsonText = new String(zis.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                if (!fileNameOnly.toLowerCase().endsWith(".json")) continue;           // JSON 以外スキップ
+                if (entryName.startsWith("__MACOSX/")) continue;                        // mac のメタは無視
+            
+                try (InputStream in = zf.getInputStream(e)) {
+                    String jsonText = new String(in.readAllBytes(), StandardCharsets.UTF_8);
                     JsonNode root = objectMapper.readTree(jsonText);
-
-                    // persons[] から「平均 keypoint_scores 最大」の person を選ぶ
-                    JsonNode persons = root.path("persons");
-                    if (!persons.isArray() || persons.isEmpty()) {
-                        continue;
-                    }
-                    JsonNode bestPerson = pickBestPerson(persons);
-                    if (bestPerson == null) {
-                        continue;
-                    }
-
-                    JsonNode keypoints = bestPerson.path("keypoints");
-                    if (!keypoints.isArray() || keypoints.size() == 0) {
-                        continue;
-                    }
-
-                    // === 17 点を取り出して double[][] に変換 ===
-                    double[][] pts17 = extract17Keypoints(keypoints);
-
-                    // === PoseFeatureUtil で正規化 & 特徴量ベクトル化 ===
-                    double[][] norm = PoseFeatureUtil.normalizeKeypoints(pts17);
-                    String featureVector = PoseFeatureUtil.buildFeatureVector(norm);
-
-                    // 正規化した 17×2 を JSON 文字列として保存
-                    String normalizedJson = objectMapper.writeValueAsString(norm);
-
-                    // ==== 画像ファイル名とローカルパス ====
-                    // JSON に image_path があればそれを優先し、なければ
-                    // "B010_keypoints.json" → "B010.png" のように推定
+                
+                    // 元のフルパス（例: .../C392/B/B001.png）から C*** を抽出
+                    String sourceImagePath = null;
+                    JsonNode node = root.get("image_path");
+                    if (node != null && node.isTextual()) sourceImagePath = node.asText();
+                    String cutCode = extractCutCodeFromSourcePath(sourceImagePath);
+                    if (cutCode == null) cutCode = "unknown";
+                
+                    // 保存先ディレクトリ: data/datasets/C392_B
+                    Path datasetDir = datasetRoot.resolve(cutCode).resolve(zipBase);
+                    Files.createDirectories(datasetDir);
+                
+                    // 対応する画像ファイル名（B001.png など）
                     String imageFileName = guessImageFileNameFromJsonOrEntry(root, entryName);
                     Path imagePath = datasetDir.resolve(imageFileName);
-
+                
+                    // === 17点を取り出し → 正規化 → 特徴量 ===
+                    JsonNode persons = root.path("persons");
+                    if (!persons.isArray() || persons.isEmpty()) continue;
+                    JsonNode best = pickBestPerson(persons);
+                    if (best == null) continue;
+                    JsonNode kps = best.path("keypoints");
+                    if (!kps.isArray() || kps.size() == 0) continue;
+                
+                    double[][] pts17 = extract17Keypoints(kps);
+                    double[][] norm = PoseFeatureUtil.normalizeKeypoints(pts17);
+                    String featureVector = PoseFeatureUtil.buildFeatureVector(norm);
+                    String normalizedJson = objectMapper.writeValueAsString(norm);
+                
+                    // DB 登録
                     PoseSample sample = new PoseSample();
-                    sample.setDatasetName(datasetName);              // 例: "B.zip"
-                    sample.setImageFileName(imageFileName);          // 例: "B010.png"
-                    sample.setImagePath(imagePath.toString());       // 例: "data/datasets/B.zip/B010.png"
-                    sample.setRawJson(jsonText);                     // 元 JSON 全体
-                    sample.setNormalizedKeypointsJson(normalizedJson); // 正規化済み 17×2
-                    sample.setFeatureVector(featureVector);          // "x0,y0,x1,y1,..." 形式
-
+                    sample.setDatasetName(zipName);
+                    sample.setImageFileName(imageFileName);
+                    sample.setImagePath(imagePath.toString());   // アプリ内の配置先
+                    sample.setSourceImagePath(sourceImagePath);  // 元データのフルパス
+                    sample.setRawJson(jsonText);
+                    sample.setNormalizedKeypointsJson(normalizedJson);
+                    sample.setFeatureVector(featureVector);
                     poseSampleRepository.save(sample);
-
+                
+                    // 画像の最終保存先を覚えておく
+                    imageDestMap.put(imageFileName.toLowerCase(), imagePath);
                 } catch (Exception ex) {
-                    System.err.println("Failed to parse JSON in entry: " + fileNameOnly);
+                    System.err.println("Skip broken JSON: " + fileNameOnly);
                     ex.printStackTrace();
-                    // 壊れた JSON はスキップして続行
                 }
             }
+        
+            // ---------- パス2：画像だけコピー ----------
+            Enumeration<? extends ZipEntry> entries2 = zf.entries();
+            while (entries2.hasMoreElements()) {
+                ZipEntry e = entries2.nextElement();
+                if (e.isDirectory()) continue;
+            
+                String entryName = e.getName();
+                String fileNameOnly = Paths.get(entryName).getFileName().toString();
+                if (entryName.startsWith("__MACOSX/")) continue;
+                if (!isImageFile(fileNameOnly)) continue;  // png/jpg/jpeg 以外は無視
+            
+                Path dest = imageDestMap.get(fileNameOnly.toLowerCase());
+                if (dest == null) {
+                    // 対応する JSON が無かった画像は unknown に避難
+                    Path fallbackDir = datasetRoot.resolve("unknown_" + zipBase);
+                    Files.createDirectories(fallbackDir);
+                    dest = fallbackDir.resolve(fileNameOnly);
+                }
+                Files.createDirectories(dest.getParent());
+                try (InputStream in = zf.getInputStream(e)) {
+                    Files.copy(in, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+        } finally {
+            try { Files.deleteIfExists(tmp); } catch (IOException ignore) {}
         }
     }
 

@@ -5,6 +5,12 @@ spring:
     password: mvpass
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+  # spring/src/main/resources/application.yml
+  app:
+    storage:
+      dataset-root: data/datasets   # 既定
+  
+  
   jpa:
     hibernate:
       ddl-auto: update     # 開発中は update / create-drop など
