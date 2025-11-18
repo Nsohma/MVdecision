@@ -17,7 +17,7 @@
       <button @click="onExport" style="margin-left:8px;">Export JSON</button>
 
       <!-- ★ バックエンドに投げて検索するボタン -->
-      <button @click="onSearch" style="margin-left:8px;">Search Similar Cuts</button>
+      <button @click="onSearch" class="btn-search" style="margin-left:8px;">検索</button>
 
       <label style="margin-left:8px;cursor:pointer;">
         Import JSON
@@ -44,10 +44,6 @@
     </p>
 
     <!-- ★ 検索結果の表示エリア -->
-    <div v-if="featurePreview" class="feature-preview">
-      <p><strong>Feature vector:</strong> {{ featurePreview.featureVector }}</p>
-    </div>
-
     <div v-if="results.length" class="search-results">
       <h3>検索結果（{{ results.length }}件）</h3>
       <div class="grid">
@@ -60,13 +56,12 @@
               @error="onImgError"
             />
           </div>
-          <div class="meta">
-            <div class="title">{{ r.datasetName }} / {{ r.imageFileName }}</div>
-            <div class="distance">dist: {{ r.distance.toFixed(3) }}</div>
-            <!-- デバッグ用にパスを出したいときはコメントアウト解除
-            <div class="path">{{ r.imagePath }}</div>
-            -->
-          </div>
+     <div class="meta">
+      <!-- ★ フルパスをそのままタイトルとして表示 -->
+      <div class="title">{{ r.displayPath }}</div>
+      <div class="distance">dist: {{ r.distance.toFixed(3) }}</div>
+    </div>
+
         </div>
       </div>
     </div>
@@ -304,7 +299,7 @@ export default {
         // 3) 計算した featureVector を使って /api/query/pose/search で類似検索
         const searchRes = await axios.post('/api/query/pose/search', {
           featureVector: featureVector, // ★ここが重要
-          topK: 10,                     // 任意。省略時はサーバ側で 10 にしている
+          topK: 15,                     // 任意。省略時はサーバ側で 10 にしている
         });
       
         // 期待レスポンス：
@@ -316,7 +311,9 @@ export default {
           datasetName: r.datasetName,
           imageFileName: r.imageFileName,
           imagePath: r.imagePath,
+          sourceImagePath: r.sourceImagePath,  // ★ 追加
           distance: r.distance,
+          displayPath: r.displayPath || `${r.datasetName}/${r.imageFileName}`,
         }));
 
     this.searchedOnce = true;
@@ -492,6 +489,12 @@ button:active { transform: scale(0.98); }
 canvas { display:block; width:100%; height:auto; }
 
 /* 検索結果のスタイル */
+.btn-search {
+  background: #000;
+  color: #fff;
+  border-color: #000;
+}
+
 .feature-preview {
   margin-top: 16px;
   padding: 8px 10px;
